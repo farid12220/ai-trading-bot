@@ -1,14 +1,28 @@
+import os
 import requests
 import time
 import uuid
 import datetime
 import random
-import os
 
 # === CONFIG ===
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+
+# Debug print
+print(f"Finnhub Key: {FINNHUB_API_KEY}")
+print(f"Supabase URL: {SUPABASE_URL}")
+print(f"Supabase Key: {SUPABASE_API_KEY}")
+
+# Sanity check
+if not FINNHUB_API_KEY:
+    print("❌ FINNHUB_API_KEY not set!")
+if not SUPABASE_URL:
+    print("❌ SUPABASE_URL not set!")
+if not SUPABASE_API_KEY:
+    print("❌ SUPABASE_API_KEY not set!")
+
 RISK_TOLERANCE = 0.2  # 0 = safe, 1 = aggressive
 TRADE_INTERVAL = 5  # seconds
 HOLD_LIMIT = 5  # number of checks before selling
