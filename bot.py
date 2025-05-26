@@ -1,17 +1,17 @@
+import os
 import requests
 import time
 import uuid
 import datetime
 import random
-import os
 
 # === CONFIG ===
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-RISK_TOLERANCE = 0.2  # 0 = safe, 1 = aggressive
+RISK_TOLERANCE = 0.2
 TRADE_INTERVAL = 5  # seconds
-HOLD_LIMIT = 20  # increased for longer holding
+HOLD_LIMIT = 20  # number of checks before considering a sale
 
 ALL_TICKERS = []
 POSITIONS = {}
@@ -57,8 +57,8 @@ def insert_trade(ticker, entry, exit, profit):
 
 def simulate_trade():
     global POSITIONS
+    MIN_PROFIT = 0.01
 
-    # Check current open positions first
     for ticker in list(POSITIONS):
         position = POSITIONS[ticker]
         current_price, _ = fetch_price(ticker)
@@ -67,30 +67,36 @@ def simulate_trade():
 
         if current_price > position['last_price']:
             POSITIONS[ticker]['last_price'] = current_price
-            POSITIONS[ticker]['hold_count'] += 1
-            print(f"{ticker} is rising, holding ({POSITIONS[ticker]['hold_count']}/{HOLD_LIMIT})")
+            POSITIONS[ticker]['hold_count'] = 0
+            print(f"{ticker} is rising, holding...")
         else:
             POSITIONS[ticker]['hold_count'] += 1
 
         if POSITIONS[ticker]['hold_count'] >= HOLD_LIMIT:
             entry_price = position['entry_price']
             profit = current_price - entry_price
-            insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f}")
-            del POSITIONS[ticker]
+            if profit >= MIN_PROFIT:
+                insert_trade(ticker, entry_price, current_price, profit)
+                print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f}")
+                del POSITIONS[ticker]
+            else:
+                print(f"{ticker}: Not enough profit to sell ({profit:.2f}), holding...")
+
         time.sleep(0.1)
 
-    # Open new position
     if len(POSITIONS) < 3 and ALL_TICKERS:
-        ticker = random.choice(ALL_TICKERS)
-        entry_price, _ = fetch_price(ticker)
-        if entry_price:
-            POSITIONS[ticker] = {
-                'entry_price': entry_price,
-                'last_price': entry_price,
-                'hold_count': 0
-            }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+        random.shuffle(ALL_TICKERS)
+        for ticker in ALL_TICKERS:
+            if ticker not in POSITIONS:
+                entry_price, _ = fetch_price(ticker)
+                if entry_price:
+                    POSITIONS[ticker] = {
+                        'entry_price': entry_price,
+                        'last_price': entry_price,
+                        'hold_count': 0
+                    }
+                    print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+                    break
 
 if __name__ == "__main__":
     print("Loading tickers...")
