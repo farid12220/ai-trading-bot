@@ -6,34 +6,43 @@ import datetime
 import random
 
 # === CONFIG ===
-FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
+ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
+ALPACA_SECRET = os.environ.get("ALPACA_SECRET")
+ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-RISK_TOLERANCE = 0.2
-TRADE_INTERVAL = 5  # seconds
-HOLD_LIMIT = 20  # number of checks before considering a sale
 
+HEADERS = {
+    "APCA-API-KEY-ID": ALPACA_API_KEY,
+    "APCA-API-SECRET-KEY": ALPACA_SECRET
+}
+
+RISK_TOLERANCE = 0.2
+TRADE_INTERVAL = 10
+HOLD_LIMIT = 12  # about 2 minutes at 10s interval
 ALL_TICKERS = []
 POSITIONS = {}
 
 def load_all_tickers():
     global ALL_TICKERS
-    url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
+    url = f"{ALPACA_BASE_URL}/v2/assets"
+    response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         data = response.json()
-        ALL_TICKERS = [stock['symbol'] for stock in data if stock['type'] == 'Common Stock']
-        print(f"Loaded {len(ALL_TICKERS)} tickers from Finnhub.")
+        ALL_TICKERS = [stock['symbol'] for stock in data if stock['tradable'] and stock['exchange'] in ["NYSE", "NASDAQ"]]
+        print(f"Loaded {len(ALL_TICKERS)} tickers from Alpaca.")
     else:
-        print("Failed to load tickers from Finnhub.")
+        print("Failed to load tickers from Alpaca:", response.text)
 
 def fetch_price(symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
+    url = f"{ALPACA_BASE_URL}/v2/stocks/{symbol}/quotes/latest"
+    response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         data = response.json()
-        return data.get("c"), data.get("pc")
-    return None, None
+        return data.get("quote", {}).get("ap")  # ask price
+    else:
+        print(f"Error fetching price for {symbol}: {response.text}")
+    return None
 
 def insert_trade(ticker, entry, exit, profit):
     payload = {
@@ -61,7 +70,7 @@ def simulate_trade():
 
     for ticker in list(POSITIONS):
         position = POSITIONS[ticker]
-        current_price, _ = fetch_price(ticker)
+        current_price = fetch_price(ticker)
         if not current_price:
             continue
 
@@ -82,13 +91,13 @@ def simulate_trade():
             else:
                 print(f"{ticker}: Not enough profit to sell ({profit:.2f}), holding...")
 
-        time.sleep(0.1)
+        time.sleep(0.2)
 
     if len(POSITIONS) < 3 and ALL_TICKERS:
         random.shuffle(ALL_TICKERS)
         for ticker in ALL_TICKERS:
             if ticker not in POSITIONS:
-                entry_price, _ = fetch_price(ticker)
+                entry_price = fetch_price(ticker)
                 if entry_price:
                     POSITIONS[ticker] = {
                         'entry_price': entry_price,
@@ -101,7 +110,7 @@ def simulate_trade():
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
-    print("AI Trading bot started...")
+    print("Alpaca-powered AI trading bot started...")
 
     while True:
         simulate_trade()
