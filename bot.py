@@ -1,3 +1,4 @@
+import os
 import requests
 import time
 import uuid
@@ -5,9 +6,9 @@ import datetime
 import random
 
 # === CONFIG ===
-FINNHUB_API_KEY = "d0p0l39r01qr8ds0oop0d0p0l39r01qr8ds0oopg"
-SUPABASE_URL = "https://your-supabase-url.supabase.co"
-SUPABASE_API_KEY = "your-supabase-service-role-key"
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 RISK_TOLERANCE = 0.2  # 0 = safe, 1 = aggressive
 TRADE_INTERVAL = 5  # seconds
 HOLD_LIMIT = 5  # number of checks before selling
