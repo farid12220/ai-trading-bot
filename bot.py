@@ -1,9 +1,9 @@
-import os
 import requests
 import time
 import uuid
 import datetime
 import random
+import os
 
 # === CONFIG ===
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
