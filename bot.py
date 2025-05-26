@@ -20,20 +20,26 @@ POSITIONS = {}
 def load_all_tickers():
     global ALL_TICKERS
     url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        ALL_TICKERS = [stock['symbol'] for stock in data if stock['type'] == 'Common Stock']
-        print(f"Loaded {len(ALL_TICKERS)} tickers from Finnhub.")
-    else:
-        print("Failed to load tickers from Finnhub.")
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            ALL_TICKERS = [stock['symbol'] for stock in data if stock['type'] == 'Common Stock']
+            print(f"Loaded {len(ALL_TICKERS)} tickers from Finnhub.")
+        else:
+            print("Failed to load tickers from Finnhub. Status code:", response.status_code)
+    except Exception as e:
+        print("Error loading tickers:", e)
 
 def fetch_price(symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        return data.get("c"), data.get("pc")
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("c"), data.get("pc")
+    except Exception as e:
+        print(f"Error fetching price for {symbol}:", e)
     return None, None
 
 def insert_trade(ticker, entry, exit, profit):
@@ -51,10 +57,13 @@ def insert_trade(ticker, entry, exit, profit):
         "Authorization": f"Bearer {SUPABASE_API_KEY}",
         "Content-Type": "application/json"
     }
-    url = f"{SUPABASE_URL}/rest/v1/trades"
-    r = requests.post(url, json=payload, headers=headers)
-    if r.status_code not in [200, 201]:
-        print("Error inserting trade:", r.text)
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/trades"
+        r = requests.post(url, json=payload, headers=headers)
+        if r.status_code not in [200, 201]:
+            print("Error inserting trade:", r.text)
+    except Exception as e:
+        print("Exception inserting trade:", e)
 
 def update_top_performers():
     global TOP_PERFORMERS
@@ -76,7 +85,6 @@ def update_top_performers():
 def simulate_trade():
     global POSITIONS
 
-    # Check current open positions first
     for ticker in list(POSITIONS):
         position = POSITIONS[ticker]
         current_price, _ = fetch_price(ticker)
@@ -98,7 +106,6 @@ def simulate_trade():
             del POSITIONS[ticker]
         time.sleep(0.1)
 
-    # Open new position
     if len(POSITIONS) < 3 and TOP_PERFORMERS:
         ticker = random.choice(TOP_PERFORMERS)
         entry_price, _ = fetch_price(ticker)
