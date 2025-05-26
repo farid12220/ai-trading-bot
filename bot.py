@@ -16,7 +16,6 @@ ALL_TICKERS = []
 TOP_PERFORMERS = []
 POSITIONS = {}
 
-
 def load_all_tickers():
     global ALL_TICKERS
     url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={FINNHUB_API_KEY}"
@@ -28,7 +27,6 @@ def load_all_tickers():
     else:
         print("Failed to load tickers from Finnhub.")
 
-
 def fetch_price(symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
     response = requests.get(url)
@@ -36,7 +34,6 @@ def fetch_price(symbol):
         data = response.json()
         return data.get("c"), data.get("pc")
     return None, None
-
 
 def insert_trade(ticker, entry, exit, profit):
     payload = {
@@ -58,7 +55,6 @@ def insert_trade(ticker, entry, exit, profit):
     if r.status_code not in [200, 201]:
         print("Error inserting trade:", r.text)
 
-
 def update_top_performers():
     global TOP_PERFORMERS
     print("Scanning top-performing stocks...")
@@ -76,7 +72,6 @@ def update_top_performers():
     TOP_PERFORMERS = [g[0] for g in gainers[:10]]
     print(f"Top performers: {TOP_PERFORMERS}")
 
-
 def simulate_trade():
     global POSITIONS
 
@@ -90,11 +85,10 @@ def simulate_trade():
         if current_price > position['last_price']:
             POSITIONS[ticker]['last_price'] = current_price
             POSITIONS[ticker]['hold_count'] += 1
-            print(f"{ticker} is rising, holding (\(POSITIONS[ticker]['hold_count']\)/{HOLD_LIMIT})")
+            print(f"{ticker} is rising, holding ({POSITIONS[ticker]['hold_count']}/{HOLD_LIMIT})")
         else:
             POSITIONS[ticker]['hold_count'] += 1
 
-        # Sell condition
         if POSITIONS[ticker]['hold_count'] >= HOLD_LIMIT:
             entry_price = position['entry_price']
             profit = current_price - entry_price
@@ -114,7 +108,6 @@ def simulate_trade():
                 'hold_count': 0
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
-
 
 if __name__ == "__main__":
     print("Loading tickers...")
