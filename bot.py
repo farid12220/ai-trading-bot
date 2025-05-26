@@ -1,59 +1,38 @@
-import os
 import requests
 import time
 import uuid
 import datetime
 import random
+import os
 
 # === CONFIG ===
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-
-# Debug print
-print(f"Finnhub Key: {FINNHUB_API_KEY}")
-print(f"Supabase URL: {SUPABASE_URL}")
-print(f"Supabase Key: {SUPABASE_API_KEY}")
-
-# Sanity check
-if not FINNHUB_API_KEY:
-    print("❌ FINNHUB_API_KEY not set!")
-if not SUPABASE_URL:
-    print("❌ SUPABASE_URL not set!")
-if not SUPABASE_API_KEY:
-    print("❌ SUPABASE_API_KEY not set!")
-
 RISK_TOLERANCE = 0.2  # 0 = safe, 1 = aggressive
 TRADE_INTERVAL = 5  # seconds
-HOLD_LIMIT = 5  # number of checks before selling
+HOLD_LIMIT = 20  # increased for longer holding
 
 ALL_TICKERS = []
-TOP_PERFORMERS = []
 POSITIONS = {}
 
 def load_all_tickers():
     global ALL_TICKERS
     url = f"https://finnhub.io/api/v1/stock/symbol?exchange=US&token={FINNHUB_API_KEY}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            ALL_TICKERS = [stock['symbol'] for stock in data if stock['type'] == 'Common Stock']
-            print(f"Loaded {len(ALL_TICKERS)} tickers from Finnhub.")
-        else:
-            print("Failed to load tickers from Finnhub. Status code:", response.status_code)
-    except Exception as e:
-        print("Error loading tickers:", e)
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        ALL_TICKERS = [stock['symbol'] for stock in data if stock['type'] == 'Common Stock']
+        print(f"Loaded {len(ALL_TICKERS)} tickers from Finnhub.")
+    else:
+        print("Failed to load tickers from Finnhub.")
 
 def fetch_price(symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("c"), data.get("pc")
-    except Exception as e:
-        print(f"Error fetching price for {symbol}:", e)
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("c"), data.get("pc")
     return None, None
 
 def insert_trade(ticker, entry, exit, profit):
@@ -64,41 +43,22 @@ def insert_trade(ticker, entry, exit, profit):
         "exit_price": exit,
         "profit": profit,
         "result": "WIN" if profit >= 0 else "LOSS",
-        "timestamp": datetime.datetime.utcnow().isoformat()
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat()
     }
     headers = {
         "apikey": SUPABASE_API_KEY,
         "Authorization": f"Bearer {SUPABASE_API_KEY}",
         "Content-Type": "application/json"
     }
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/trades"
-        r = requests.post(url, json=payload, headers=headers)
-        if r.status_code not in [200, 201]:
-            print("Error inserting trade:", r.text)
-    except Exception as e:
-        print("Exception inserting trade:", e)
-
-def update_top_performers():
-    global TOP_PERFORMERS
-    print("Scanning top-performing stocks...")
-    sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
-    gainers = []
-
-    for symbol in sample:
-        current, prev_close = fetch_price(symbol)
-        if current and prev_close and prev_close > 0:
-            change = (current - prev_close) / prev_close
-            gainers.append((symbol, change))
-        time.sleep(0.2)
-
-    gainers.sort(key=lambda x: x[1], reverse=True)
-    TOP_PERFORMERS = [g[0] for g in gainers[:10]]
-    print(f"Top performers: {TOP_PERFORMERS}")
+    url = f"{SUPABASE_URL}/rest/v1/trades"
+    r = requests.post(url, json=payload, headers=headers)
+    if r.status_code not in [200, 201]:
+        print("Error inserting trade:", r.text)
 
 def simulate_trade():
     global POSITIONS
 
+    # Check current open positions first
     for ticker in list(POSITIONS):
         position = POSITIONS[ticker]
         current_price, _ = fetch_price(ticker)
@@ -120,8 +80,9 @@ def simulate_trade():
             del POSITIONS[ticker]
         time.sleep(0.1)
 
-    if len(POSITIONS) < 3 and TOP_PERFORMERS:
-        ticker = random.choice(TOP_PERFORMERS)
+    # Open new position
+    if len(POSITIONS) < 3 and ALL_TICKERS:
+        ticker = random.choice(ALL_TICKERS)
         entry_price, _ = fetch_price(ticker)
         if entry_price:
             POSITIONS[ticker] = {
@@ -134,11 +95,8 @@ def simulate_trade():
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
-    update_top_performers()
     print("AI Trading bot started...")
 
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-        if int(time.time()) % 50 == 0:
-            update_top_performers()
