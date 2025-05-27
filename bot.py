@@ -14,18 +14,10 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
+DELAY = 0.3
 
 ALL_TICKERS = []
-TOP_PERFORMERS = []
 POSITIONS = {}
-
-def get_holding_limit(price):
-    if price >= 150:
-        return 5
-    elif price >= 50:
-        return 8
-    else:
-        return 12
 
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
@@ -34,6 +26,7 @@ def fetch_price(symbol):
         "APCA-API-SECRET-KEY": ALPACA_API_SECRET
     }
     response = requests.get(url, headers=headers)
+    time.sleep(DELAY)
     if response.status_code == 200:
         data = response.json()
         return data["quote"].get("ap"), data["quote"].get("bp")
@@ -76,21 +69,6 @@ def load_all_tickers():
     else:
         print("Failed to load tickers from Alpaca:", response.text)
 
-def update_top_performers():
-    global TOP_PERFORMERS
-    print("Scanning top-performing stocks...")
-    sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
-    gainers = []
-    for symbol in sample:
-        current, previous = fetch_price(symbol)
-        if current and previous and previous > 0:
-            change = (current - previous) / previous
-            gainers.append((symbol, change))
-        time.sleep(0.1)
-    gainers.sort(key=lambda x: x[1], reverse=True)
-    TOP_PERFORMERS = [g[0] for g in gainers[:10]]
-    print(f"Top performers: {TOP_PERFORMERS}")
-
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
@@ -127,10 +105,12 @@ def simulate_trade():
             del POSITIONS[ticker]
         else:
             print(f"{ticker} holding, change: {percent_change*100:.2f}%")
-        time.sleep(0.1)
+        time.sleep(DELAY)
 
-    if len(POSITIONS) < MAX_OPEN_POSITIONS and TOP_PERFORMERS:
-        ticker = random.choice(TOP_PERFORMERS)
+    while len(POSITIONS) < MAX_OPEN_POSITIONS:
+        ticker = random.choice(ALL_TICKERS)
+        if ticker in POSITIONS:
+            continue
         entry_price, _ = fetch_price(ticker)
         if entry_price:
             POSITIONS[ticker] = {
@@ -140,15 +120,13 @@ def simulate_trade():
                 'peak_price': entry_price
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+        time.sleep(DELAY)
 
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
-    update_top_performers()
     print("AI Trading bot started...")
 
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-        if int(time.time()) % 60 == 0:
-            update_top_performers()
