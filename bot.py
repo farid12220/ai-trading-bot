@@ -9,37 +9,47 @@ import random
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
-ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-TRADE_INTERVAL = 5
-MAX_OPEN_POSITIONS = 50
+TRADE_INTERVAL = 5  # seconds
+RISK_TOLERANCE = 0.2
+HOLD_LIMIT = 5
+STOP_LOSS_PERCENT = -0.5  # -0.5%
+TAKE_PROFIT_TRIGGER = 1.0  # 1%
+TRAILING_STOP_PERCENT = 0.5  # sell if drops 0.5% from high after 1% gain
+MAX_POSITIONS_PER_TICKER = 50
 
-ALL_TICKERS = []
-TOP_PERFORMERS = []
+HEADERS = {
+    "APCA-API-KEY-ID": ALPACA_API_KEY,
+    "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+}
+
 POSITIONS = {}
 
-def get_holding_limit(price):
-    if price >= 150:
-        return 5
-    elif price >= 50:
-        return 8
-    else:
-        return 12
 
-def fetch_price(symbol):
-    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    response = requests.get(url, headers=headers)
+def fetch_tradable_tickers():
+    url = f"{ALPACA_BASE_URL}/v2/assets"
+    response = requests.get(url, headers=HEADERS)
     if response.status_code == 200:
         data = response.json()
-        return data["quote"].get("ap"), data["quote"].get("bp")
+        tickers = [a['symbol'] for a in data if a['tradable'] and a['status'] == 'active']
+        print(f"Loaded {len(tickers)} tradable tickers from Alpaca.")
+        return tickers
     else:
-        print(f"Error fetching price for {symbol}: {response.text}")
-        return None, None
+        print("Failed to load tickers from Alpaca:", response.text)
+        return []
+
+
+def fetch_price(symbol):
+    url = f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        data = response.json()
+        return data['quote']['ap']  # ask price
+    else:
+        print(f"Error fetching price for {symbol}:", response.text)
+        return None
+
 
 def insert_trade(ticker, entry, exit, profit):
     payload = {
@@ -61,94 +71,68 @@ def insert_trade(ticker, entry, exit, profit):
     if r.status_code not in [200, 201]:
         print("Error inserting trade:", r.text)
 
-def load_all_tickers():
-    global ALL_TICKERS
-    url = f"{ALPACA_BASE_URL}/v2/assets"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        ALL_TICKERS = [asset['symbol'] for asset in data if asset['tradable'] and asset['exchange'] in ["NASDAQ", "NYSE"]]
-        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca.")
-    else:
-        print("Failed to load tickers from Alpaca:", response.text)
 
-def update_top_performers():
-    global TOP_PERFORMERS
-    print("Scanning top-performing stocks...")
-    sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
+def scan_and_trade(tickers):
+    top = random.sample(tickers, min(50, len(tickers)))
     gainers = []
-    for symbol in sample:
-        current, previous = fetch_price(symbol)
-        if current and previous and previous > 0:
-            change = (current - previous) / previous
-            gainers.append((symbol, change))
-        time.sleep(0.1)
-    gainers.sort(key=lambda x: x[1], reverse=True)
-    TOP_PERFORMERS = [g[0] for g in gainers[:10]]
-    print(f"Top performers: {TOP_PERFORMERS}")
 
-def simulate_trade():
-    global POSITIONS
-    for ticker in list(POSITIONS):
-        position = POSITIONS[ticker]
-        current_price, _ = fetch_price(ticker)
+    for ticker in top:
+        price = fetch_price(ticker)
+        if not price:
+            continue
+
+        # BUY LOGIC
+        if len(POSITIONS.get(ticker, [])) < MAX_POSITIONS_PER_TICKER:
+            POSITIONS.setdefault(ticker, []).append({
+                "entry_price": price,
+                "last_price": price,
+                "highest_price": price,
+                "hold_count": 0
+            })
+            print(f"{ticker}: BOUGHT at {price:.2f}")
+
+
+def evaluate_positions():
+    for ticker in list(POSITIONS.keys()):
+        positions = POSITIONS[ticker]
+        current_price = fetch_price(ticker)
         if not current_price:
             continue
 
-        entry_price = position['entry_price']
-        percent_change = (current_price - entry_price) / entry_price
+        to_remove = []
+        for pos in positions:
+            entry = pos['entry_price']
+            highest = max(pos['highest_price'], current_price)
+            pos['highest_price'] = highest
 
-        if percent_change >= 0.01:
-            if not position['trail_active']:
-                position['trail_active'] = True
-                position['peak_price'] = current_price
+            change_percent = ((current_price - entry) / entry) * 100
+            trailing_drop = ((highest - current_price) / highest) * 100
+
+            if change_percent <= STOP_LOSS_PERCENT:
+                profit = current_price - entry
+                insert_trade(ticker, entry, current_price, profit)
+                print(f"{ticker}: SOLD at {current_price:.2f}, Stop-loss hit, Profit: {profit:.2f}")
+                to_remove.append(pos)
+            elif change_percent >= TAKE_PROFIT_TRIGGER and trailing_drop >= TRAILING_STOP_PERCENT:
+                profit = current_price - entry
+                insert_trade(ticker, entry, current_price, profit)
+                print(f"{ticker}: SOLD at {current_price:.2f}, Trailing profit sell, Profit: {profit:.2f}")
+                to_remove.append(pos)
             else:
-                position['peak_price'] = max(position['peak_price'], current_price)
+                print(f"{ticker} holding, change: {change_percent:.2f}%")
 
-        if percent_change <= -0.005:
-            reason = "Stop loss triggered"
-            sell = True
-        elif position['trail_active']:
-            drop_from_peak = (position['peak_price'] - current_price) / position['peak_price']
-            sell = drop_from_peak >= 0.005
-            reason = "Trailing stop hit" if sell else None
-        else:
-            sell = False
-            reason = None
+        for pos in to_remove:
+            POSITIONS[ticker].remove(pos)
 
-        if sell:
-            profit = current_price - entry_price
-            insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%) | {reason}")
+        if not POSITIONS[ticker]:
             del POSITIONS[ticker]
-        else:
-            print(f"{ticker} holding, change: {percent_change*100:.2f}%")
-        time.sleep(0.1)
 
-    if len(POSITIONS) < MAX_OPEN_POSITIONS and TOP_PERFORMERS:
-        ticker = random.choice(TOP_PERFORMERS)
-        entry_price, _ = fetch_price(ticker)
-        if entry_price:
-            POSITIONS[ticker] = {
-                'entry_price': entry_price,
-                'last_price': entry_price,
-                'trail_active': False,
-                'peak_price': entry_price
-            }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
 
 if __name__ == "__main__":
-    print("Loading tickers...")
-    load_all_tickers()
-    update_top_performers()
+    all_tickers = fetch_tradable_tickers()
     print("AI Trading bot started...")
 
     while True:
-        simulate_trade()
+        scan_and_trade(all_tickers)
+        evaluate_positions()
         time.sleep(TRADE_INTERVAL)
-        if int(time.time()) % 60 == 0:
-            update_top_performers()
