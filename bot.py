@@ -18,14 +18,13 @@ ALL_TICKERS = []
 TOP_PERFORMERS = []
 POSITIONS = {}
 
-# === HELPERS ===
 def get_holding_limit(price):
     if price >= 150:
-        return 5  # Large-cap: fast movers
+        return 5
     elif price >= 50:
-        return 8  # Mid-cap: moderate hold
+        return 8
     else:
-        return 12  # Small-cap: slower, more time
+        return 12
 
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
@@ -101,31 +100,47 @@ def simulate_trade():
 
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
-        hold_limit = position['hold_limit']
 
-        # Stop loss: -0.5%, Take profit: +1%
-        if percent_change <= -0.005 or percent_change >= 0.01 or position['hold_count'] >= hold_limit:
+        # Update highest price reached after 1% gain
+        if percent_change >= 0.01:
+            if not position['trail_active']:
+                position['trail_active'] = True
+                position['peak_price'] = current_price
+            else:
+                position['peak_price'] = max(position['peak_price'], current_price)
+
+        # Sell logic
+        if percent_change <= -0.005:
+            reason = "Stop loss triggered"
+            sell = True
+        elif position['trail_active']:
+            drop_from_peak = (position['peak_price'] - current_price) / position['peak_price']
+            sell = drop_from_peak >= 0.005
+            reason = "Trailing stop hit" if sell else None
+        else:
+            sell = False
+            reason = None
+
+        if sell:
             profit = current_price - entry_price
             insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%)")
+            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%) | {reason}")
             del POSITIONS[ticker]
         else:
-            POSITIONS[ticker]['hold_count'] += 1
-            print(f"{ticker} holding ({POSITIONS[ticker]['hold_count']}/{hold_limit})")
+            print(f"{ticker} holding, change: {percent_change*100:.2f}%")
         time.sleep(0.1)
 
     if len(POSITIONS) < 3 and TOP_PERFORMERS:
         ticker = random.choice(TOP_PERFORMERS)
         entry_price, _ = fetch_price(ticker)
         if entry_price:
-            hold_limit = get_holding_limit(entry_price)
             POSITIONS[ticker] = {
                 'entry_price': entry_price,
                 'last_price': entry_price,
-                'hold_count': 0,
-                'hold_limit': hold_limit
+                'trail_active': False,
+                'peak_price': entry_price
             }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f}, Hold Limit: {hold_limit}")
+            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
 
 if __name__ == "__main__":
     print("Loading tickers...")
