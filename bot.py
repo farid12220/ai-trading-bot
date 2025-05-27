@@ -13,6 +13,7 @@ ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
+MAX_OPEN_POSITIONS = 50
 
 ALL_TICKERS = []
 TOP_PERFORMERS = []
@@ -101,7 +102,6 @@ def simulate_trade():
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
 
-        # Update highest price reached after 1% gain
         if percent_change >= 0.01:
             if not position['trail_active']:
                 position['trail_active'] = True
@@ -109,7 +109,6 @@ def simulate_trade():
             else:
                 position['peak_price'] = max(position['peak_price'], current_price)
 
-        # Sell logic
         if percent_change <= -0.005:
             reason = "Stop loss triggered"
             sell = True
@@ -130,7 +129,7 @@ def simulate_trade():
             print(f"{ticker} holding, change: {percent_change*100:.2f}%")
         time.sleep(0.1)
 
-    if len(POSITIONS) < 3 and TOP_PERFORMERS:
+    if len(POSITIONS) < MAX_OPEN_POSITIONS and TOP_PERFORMERS:
         ticker = random.choice(TOP_PERFORMERS)
         entry_price, _ = fetch_price(ticker)
         if entry_price:
