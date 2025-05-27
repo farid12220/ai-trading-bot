@@ -1,19 +1,15 @@
-import requests
+import os
 import time
 import uuid
 import datetime
-import os
+import requests
 
-# === CONFIG ===
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
+ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-
-if not all([ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_BASE_URL, SUPABASE_URL, SUPABASE_API_KEY]):
-    print("❌ Environment variables not set correctly.")
-    exit()
 
 HEADERS = {
     "APCA-API-KEY-ID": ALPACA_API_KEY,
@@ -27,102 +23,70 @@ SUPABASE_HEADERS = {
 }
 
 POSITIONS = {}
-ALL_TICKERS = []
-TRADE_INTERVAL = 5
-STOP_LOSS = 0.005  # 0.5%
-TRAILING_PROFIT_TRIGGER = 0.01  # 1%
-TRAILING_PROFIT_DROP = 0.005  # 0.5%
 MAX_POSITIONS = 50
 
-def load_all_tickers():
-    print("🔁 Loading tickers from Alpaca...")
+def fetch_all_tickers():
     url = f"{ALPACA_BASE_URL}/v2/assets"
-    try:
-        r = requests.get(url, headers=HEADERS)
-        r.raise_for_status()
-        assets = r.json()
-        tradable = [a['symbol'] for a in assets if a['tradable'] and a['status'] == 'active']
-        print(f"✅ Loaded {len(tradable)} tradable tickers from Alpaca")
-        return tradable
-    except Exception as e:
-        print(f"❌ Error loading tickers: {e}")
-        return []
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        assets = response.json()
+        return [asset['symbol'] for asset in assets if asset['tradable']]
+    return []
 
 def fetch_price(symbol):
-    url = f"{ALPACA_BASE_URL}/v2/stocks/{symbol}/quotes/latest"
-    try:
-        r = requests.get(url, headers=HEADERS)
-        if r.status_code == 429:
-            time.sleep(1)
-            return None
-        r.raise_for_status()
-        data = r.json()
-        return data['quote']['ap'], True
-    except Exception as e:
-        print(f"⚠️ Error fetching price for {symbol}: {e}")
-        return None, False
+    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/quotes/latest"
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("quote", {}).get("ap") or data.get("quote", {}).get("bp")
+    return None
 
-def insert_trade(ticker, entry, exit, profit):
+def insert_trade(ticker, entry, exit_price, profit):
     payload = {
         "id": str(uuid.uuid4()),
         "ticker": ticker,
         "entry_price": entry,
-        "exit_price": exit,
+        "exit_price": exit_price,
         "profit": profit,
         "result": "WIN" if profit >= 0 else "LOSS",
         "timestamp": datetime.datetime.now(datetime.UTC).isoformat()
     }
-    r = requests.post(f"{SUPABASE_URL}/rest/v1/trades", json=payload, headers=SUPABASE_HEADERS)
-    if r.status_code not in [200, 201]:
-        print(f"❌ Error inserting trade for {ticker}: {r.text}")
+    url = f"{SUPABASE_URL}/rest/v1/trades"
+    requests.post(url, json=payload, headers=SUPABASE_HEADERS)
 
-def scan_stocks():
-    global ALL_TICKERS
-    selected = []
-    for symbol in ALL_TICKERS[:150]:
-        price, ok = fetch_price(symbol)
-        if ok and price and 1 < price < 500:
-            selected.append((symbol, price))
-        if len(selected) >= MAX_POSITIONS:
-            break
-        time.sleep(0.2)
-    print(f"🔎 Scanned and selected {len(selected)} tickers.")
-    return selected
-
-def simulate_trading_cycle(selected):
-    global POSITIONS
-    for symbol, price in selected:
+def monitor_and_trade(tickers):
+    for symbol in tickers:
         if symbol in POSITIONS:
-            position = POSITIONS[symbol]
-            change = (price - position['entry']) / position['entry']
-            high = position['high']
-            if price > high:
-                POSITIONS[symbol]['high'] = price
-
-            # stop loss
-            if change <= -STOP_LOSS:
-                print(f"❌ {symbol} dropped -{change*100:.2f}%, selling.")
-                insert_trade(symbol, position['entry'], price, price - position['entry'])
-                del POSITIONS[symbol]
+            current_price = fetch_price(symbol)
+            if not current_price:
                 continue
+            position = POSITIONS[symbol]
+            entry = position['entry']
+            max_seen = position['max']
+            change = (current_price - entry) / entry
+            POSITIONS[symbol]['max'] = max(current_price, max_seen)
+            print(f"{symbol} holding, change: {change:.2%}")
 
-            # trailing profit logic
-            gain = (high - position['entry']) / position['entry']
-            drop = (high - price) / position['entry']
-            if gain >= TRAILING_PROFIT_TRIGGER and drop >= TRAILING_PROFIT_DROP:
-                print(f"✅ {symbol} hit trailing target, selling.")
-                insert_trade(symbol, position['entry'], price, price - position['entry'])
+            if change <= -0.005:
+                insert_trade(symbol, entry, current_price, current_price - entry)
                 del POSITIONS[symbol]
-        else:
-            if len(POSITIONS) < MAX_POSITIONS:
-                POSITIONS[symbol] = {"entry": price, "high": price}
-                print(f"🟢 {symbol}: BOUGHT at {price:.2f}")
-        time.sleep(0.2)
+            elif change >= 0.01:
+                peak_profit = (max_seen - entry) / entry
+                if (max_seen - current_price) / entry >= 0.005:
+                    insert_trade(symbol, entry, current_price, current_price - entry)
+                    del POSITIONS[symbol]
+        elif len(POSITIONS) < MAX_POSITIONS:
+            entry_price = fetch_price(symbol)
+            if entry_price:
+                POSITIONS[symbol] = {"entry": entry_price, "max": entry_price}
+                print(f"{symbol}: BOUGHT at {entry_price}")
+        time.sleep(0.3)
 
 if __name__ == "__main__":
-    print("🚀 Starting bot...")
-    ALL_TICKERS = load_all_tickers()
+    print("Starting bot...")
+    all_tickers = fetch_all_tickers()
+    print(f"Loaded {len(all_tickers)} tradable tickers from Alpaca")
+
     while True:
-        selection = scan_stocks()
-        simulate_trading_cycle(selection)
-        time.sleep(TRADE_INTERVAL)
+        monitor_and_trade(all_tickers)
+        time.sleep(10)
