@@ -1,102 +1,105 @@
-import os
 import requests
 import time
 import uuid
 import datetime
+import os
+import random
 
-# === API Keys & URLs ===
+# === CONFIG ===
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
-ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
+ALPACA_SECRET_KEY = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
-
 HEADERS = {
     "APCA-API-KEY-ID": ALPACA_API_KEY,
-    "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
 }
-
 POSITIONS = {}
-ALL_TICKERS = []
 MAX_POSITIONS = 50
-REQUEST_DELAY = 0.25  # delay between requests to avoid throttling
+HOLD_LIMIT = 5
 
-def load_all_tickers():
-    global ALL_TICKERS
+# === HELPERS ===
+def fetch_tickers():
+    print("Loading tickers from Alpaca...")
     url = f"{ALPACA_BASE_URL}/v2/assets"
-    response = requests.get(url, headers=HEADERS)
-    if response.status_code == 200:
-        data = response.json()
-        ALL_TICKERS = [a['symbol'] for a in data if a['tradable']]
-        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca")
-    else:
-        print("Failed to load tickers:", response.text)
+    try:
+        res = requests.get(url, headers=HEADERS)
+        res.raise_for_status()
+        data = res.json()
+        tradable = [a['symbol'] for a in data if a['tradable'] and a['status'] == 'active']
+        print(f"Loaded {len(tradable)} tradable tickers from Alpaca")
+        return tradable
+    except Exception as e:
+        print("Error loading tickers:", e)
+        return []
 
-def fetch_price(symbol):
+def get_price(symbol):
     url = f"{ALPACA_BASE_URL}/v2/stocks/{symbol}/quotes/latest"
-    response = requests.get(url, headers=HEADERS)
-    if response.status_code == 200:
-        data = response.json()
-        return data['quote']['ap'], data['quote']['bp']  # ask price (ap), bid price (bp)
-    else:
-        return None, None
+    try:
+        res = requests.get(url, headers=HEADERS)
+        res.raise_for_status()
+        quote = res.json()
+        return quote.get("ask_price") or quote.get("bid_price")
+    except Exception as e:
+        print(f"Error fetching price for {symbol}: {e}")
+        return None
 
-def simulate_trade():
-    global POSITIONS
+# === LOGIC ===
+def scan_and_buy(tickers):
+    if len(POSITIONS) >= MAX_POSITIONS:
+        return
+    random.shuffle(tickers)
+    for symbol in tickers:
+        if symbol in POSITIONS:
+            continue
+        price = get_price(symbol)
+        if price:
+            POSITIONS[symbol] = {
+                "entry": price,
+                "peak": price,
+                "holds": 0
+            }
+            print(f"{symbol}: BOUGHT at {price:.2f}")
+        time.sleep(0.25)
+        if len(POSITIONS) >= MAX_POSITIONS:
+            break
 
-    # Check existing positions
-    for symbol in list(POSITIONS.keys()):
-        current_price, _ = fetch_price(symbol)
-        if current_price is None:
-            print(f"Failed to fetch price for {symbol}")
+def monitor_positions():
+    to_remove = []
+    for symbol, pos in POSITIONS.items():
+        price = get_price(symbol)
+        if not price:
             continue
 
-        position = POSITIONS[symbol]
-        entry = position["entry_price"]
-        highest = position["highest_price"]
-        change = (current_price - entry) / entry
+        entry = pos['entry']
+        peak = pos['peak']
 
-        # Update highest price
-        if current_price > highest:
-            POSITIONS[symbol]["highest_price"] = current_price
+        if price > peak:
+            POSITIONS[symbol]['peak'] = price
 
-        # Stop-loss: -0.5%
-        if change <= -0.005:
-            print(f"{symbol}: SOLD at {current_price:.2f} (Stop-Loss)")
-            del POSITIONS[symbol]
-            continue
+        change = ((price - entry) / entry) * 100
+        print(f"{symbol} holding, change: {change:.2f}%")
 
-        # Profit rule: +1% then trail by -0.5%
-        if change >= 0.01:
-            drop_from_high = (current_price - highest) / highest
-            if drop_from_high <= -0.005:
-                print(f"{symbol}: SOLD at {current_price:.2f} (Trailing Stop)")
-                del POSITIONS[symbol]
-                continue
+        if change <= -0.5:
+            print(f"{symbol}: SOLD at {price:.2f}, LOSS {change:.2f}%")
+            to_remove.append(symbol)
+        elif peak >= entry * 1.01 and price <= peak * 0.995:
+            gain = ((price - entry) / entry) * 100
+            print(f"{symbol}: SOLD at {price:.2f}, PROFIT {gain:.2f}%")
+            to_remove.append(symbol)
 
-        time.sleep(REQUEST_DELAY)
+        time.sleep(0.25)
 
-    # Open new positions if below limit
-    if len(POSITIONS) < MAX_POSITIONS:
-        needed = MAX_POSITIONS - len(POSITIONS)
-        sample = ALL_TICKERS[:needed * 2]  # buffer in case some are untradable
+    for sym in to_remove:
+        del POSITIONS[sym]
 
-        for symbol in sample:
-            if symbol in POSITIONS:
-                continue
-            ask, bid = fetch_price(symbol)
-            if ask:
-                POSITIONS[symbol] = {
-                    "entry_price": ask,
-                    "highest_price": ask,
-                    "time": time.time()
-                }
-                print(f"{symbol}: BOUGHT at {ask:.2f}")
-                time.sleep(REQUEST_DELAY)
-                if len(POSITIONS) >= MAX_POSITIONS:
-                    break
+# === MAIN ===
+print("Starting bot...")
+tickers = fetch_tickers()
+if not tickers:
+    print("No tickers loaded. Exiting.")
+    exit()
 
-if __name__ == "__main__":
-    print("Starting bot...")
-    load_all_tickers()
-    while True:
-        simulate_trade()
-        time.sleep(1)
+while True:
+    monitor_positions()
+    scan_and_buy(tickers)
+    time.sleep(5)
