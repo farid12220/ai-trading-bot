@@ -1,8 +1,9 @@
+import os
 import requests
 import time
 import uuid
 import datetime
-import os
+import random
 
 # === CONFIG ===
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
@@ -11,54 +12,43 @@ ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
 ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+RISK_TOLERANCE = 0.2
+TRADE_INTERVAL = 5
+HOLD_LIMIT = 5
 
-HEADERS = {
-    "APCA-API-KEY-ID": ALPACA_API_KEY,
-    "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-}
-
-# === GLOBAL STATE ===
 ALL_TICKERS = []
 TOP_PERFORMERS = []
 POSITIONS = {}
-HOLD_LIMIT = 5
-TRADE_INTERVAL = 5
 
-# === LOAD TICKERS ===
 def load_all_tickers():
     global ALL_TICKERS
-    if not ALPACA_API_KEY or not ALPACA_API_SECRET:
-        print("Missing Alpaca credentials")
-        return
-
     url = f"{ALPACA_BASE_URL}/v2/assets"
-    try:
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            data = response.json()
-            ALL_TICKERS = [d['symbol'] for d in data if d.get('tradable') and d.get('status') == 'active']
-            print(f"Loaded {len(ALL_TICKERS)} tickers from Alpaca.")
-        else:
-            print(f"Failed to load tickers from Alpaca: {response.text}")
-    except Exception as e:
-        print("Error loading tickers:", str(e))
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        ALL_TICKERS = [asset['symbol'] for asset in data if asset['tradable'] and asset['exchange'] in ["NASDAQ", "NYSE"]]
+        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca.")
+    else:
+        print("Failed to load tickers from Alpaca:", response.text)
 
-# === FETCH PRICE ===
 def fetch_price(symbol):
-    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/quotes/latest"
-    try:
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            data = response.json()
-            return data['quote']['ap']
-        else:
-            print(f"Error fetching price for {symbol}: {response.text}")
-            return None
-    except Exception as e:
-        print("Fetch error:", str(e))
-        return None
+    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        return data["quote"].get("ap"), data["quote"].get("bp")
+    else:
+        print(f"Error fetching price for {symbol}: {response.text}")
+        return None, None
 
-# === RECORD TRADE ===
 def insert_trade(ticker, entry, exit, profit):
     payload = {
         "id": str(uuid.uuid4()),
@@ -79,59 +69,61 @@ def insert_trade(ticker, entry, exit, profit):
     if r.status_code not in [200, 201]:
         print("Error inserting trade:", r.text)
 
-# === TOP STOCKS ===
 def update_top_performers():
     global TOP_PERFORMERS
     print("Scanning top-performing stocks...")
-    sample = ALL_TICKERS[:100]
+    sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
     gainers = []
     for symbol in sample:
-        price = fetch_price(symbol)
-        if price:
-            change = random.uniform(-0.05, 0.05)  # Mock gain for now
+        current, prev = fetch_price(symbol)
+        if current and prev and prev > 0:
+            change = (current - prev) / prev
             gainers.append((symbol, change))
-        time.sleep(0.1)
+        time.sleep(0.2)
     gainers.sort(key=lambda x: x[1], reverse=True)
     TOP_PERFORMERS = [g[0] for g in gainers[:10]]
     print(f"Top performers: {TOP_PERFORMERS}")
 
-# === SIMULATE TRADES ===
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
-        current = fetch_price(ticker)
-        if not current:
+        position = POSITIONS[ticker]
+        current_price, _ = fetch_price(ticker)
+        if not current_price:
             continue
-        if current > POSITIONS[ticker]['last_price']:
-            POSITIONS[ticker]['last_price'] = current
+        if current_price > position['last_price']:
+            POSITIONS[ticker]['last_price'] = current_price
             POSITIONS[ticker]['hold_count'] += 1
+            print(f"{ticker} is rising, holding ({POSITIONS[ticker]['hold_count']}/{HOLD_LIMIT})")
         else:
             POSITIONS[ticker]['hold_count'] += 1
         if POSITIONS[ticker]['hold_count'] >= HOLD_LIMIT:
-            entry = POSITIONS[ticker]['entry_price']
-            profit = current - entry
-            insert_trade(ticker, entry, current, profit)
-            print(f"{ticker}: SOLD at {current}, Profit: {profit:.2f}")
+            entry_price = position['entry_price']
+            profit = current_price - entry_price
+            insert_trade(ticker, entry_price, current_price, profit)
+            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f}")
             del POSITIONS[ticker]
+        time.sleep(0.1)
+
     if len(POSITIONS) < 3 and TOP_PERFORMERS:
         ticker = random.choice(TOP_PERFORMERS)
-        entry = fetch_price(ticker)
-        if entry:
+        entry_price, _ = fetch_price(ticker)
+        if entry_price:
             POSITIONS[ticker] = {
-                "entry_price": entry,
-                "last_price": entry,
-                "hold_count": 0
+                'entry_price': entry_price,
+                'last_price': entry_price,
+                'hold_count': 0
             }
-            print(f"{ticker}: BOUGHT at {entry}")
+            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
 
-# === MAIN ===
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
     update_top_performers()
     print("AI Trading bot started...")
+
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-        if int(time.time()) % 60 == 0:
+        if int(time.time()) % 50 == 0:
             update_top_performers()
