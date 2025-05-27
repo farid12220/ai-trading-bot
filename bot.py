@@ -12,28 +12,20 @@ ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
 ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-RISK_TOLERANCE = 0.2
 TRADE_INTERVAL = 5
-HOLD_LIMIT = 5
 
 ALL_TICKERS = []
 TOP_PERFORMERS = []
 POSITIONS = {}
 
-def load_all_tickers():
-    global ALL_TICKERS
-    url = f"{ALPACA_BASE_URL}/v2/assets"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        ALL_TICKERS = [asset['symbol'] for asset in data if asset['tradable'] and asset['exchange'] in ["NASDAQ", "NYSE"]]
-        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca.")
+# === HELPERS ===
+def get_holding_limit(price):
+    if price >= 150:
+        return 5  # Large-cap: fast movers
+    elif price >= 50:
+        return 8  # Mid-cap: moderate hold
     else:
-        print("Failed to load tickers from Alpaca:", response.text)
+        return 12  # Small-cap: slower, more time
 
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
@@ -69,17 +61,32 @@ def insert_trade(ticker, entry, exit, profit):
     if r.status_code not in [200, 201]:
         print("Error inserting trade:", r.text)
 
+def load_all_tickers():
+    global ALL_TICKERS
+    url = f"{ALPACA_BASE_URL}/v2/assets"
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        ALL_TICKERS = [asset['symbol'] for asset in data if asset['tradable'] and asset['exchange'] in ["NASDAQ", "NYSE"]]
+        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca.")
+    else:
+        print("Failed to load tickers from Alpaca:", response.text)
+
 def update_top_performers():
     global TOP_PERFORMERS
     print("Scanning top-performing stocks...")
     sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
     gainers = []
     for symbol in sample:
-        current, prev = fetch_price(symbol)
-        if current and prev and prev > 0:
-            change = (current - prev) / prev
+        current, previous = fetch_price(symbol)
+        if current and previous and previous > 0:
+            change = (current - previous) / previous
             gainers.append((symbol, change))
-        time.sleep(0.2)
+        time.sleep(0.1)
     gainers.sort(key=lambda x: x[1], reverse=True)
     TOP_PERFORMERS = [g[0] for g in gainers[:10]]
     print(f"Top performers: {TOP_PERFORMERS}")
@@ -91,30 +98,34 @@ def simulate_trade():
         current_price, _ = fetch_price(ticker)
         if not current_price:
             continue
-        if current_price > position['last_price']:
-            POSITIONS[ticker]['last_price'] = current_price
-            POSITIONS[ticker]['hold_count'] += 1
-            print(f"{ticker} is rising, holding ({POSITIONS[ticker]['hold_count']}/{HOLD_LIMIT})")
-        else:
-            POSITIONS[ticker]['hold_count'] += 1
-        if POSITIONS[ticker]['hold_count'] >= HOLD_LIMIT:
-            entry_price = position['entry_price']
+
+        entry_price = position['entry_price']
+        percent_change = (current_price - entry_price) / entry_price
+        hold_limit = position['hold_limit']
+
+        # Stop loss: -0.5%, Take profit: +1%
+        if percent_change <= -0.005 or percent_change >= 0.01 or position['hold_count'] >= hold_limit:
             profit = current_price - entry_price
             insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f}")
+            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%)")
             del POSITIONS[ticker]
+        else:
+            POSITIONS[ticker]['hold_count'] += 1
+            print(f"{ticker} holding ({POSITIONS[ticker]['hold_count']}/{hold_limit})")
         time.sleep(0.1)
 
     if len(POSITIONS) < 3 and TOP_PERFORMERS:
         ticker = random.choice(TOP_PERFORMERS)
         entry_price, _ = fetch_price(ticker)
         if entry_price:
+            hold_limit = get_holding_limit(entry_price)
             POSITIONS[ticker] = {
                 'entry_price': entry_price,
                 'last_price': entry_price,
-                'hold_count': 0
+                'hold_count': 0,
+                'hold_limit': hold_limit
             }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+            print(f"{ticker}: BOUGHT at {entry_price:.2f}, Hold Limit: {hold_limit}")
 
 if __name__ == "__main__":
     print("Loading tickers...")
@@ -125,5 +136,5 @@ if __name__ == "__main__":
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-        if int(time.time()) % 50 == 0:
+        if int(time.time()) % 60 == 0:
             update_top_performers()
