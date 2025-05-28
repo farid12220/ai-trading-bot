@@ -14,8 +14,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
-DELAY = 0.3
-DAILY_LOSS_LIMIT = -100
+DELAY = 0.5
+DAILY_LOSS_CAP = -100
 
 ALL_TICKERS = []
 POSITIONS = {}
@@ -27,55 +27,14 @@ def fetch_price(symbol):
         "APCA-API-KEY-ID": ALPACA_API_KEY,
         "APCA-API-SECRET-KEY": ALPACA_API_SECRET
     }
-    try:
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        data = r.json()["quote"]
-        return data["ap"], data["bp"]
-    except:
+    response = requests.get(url, headers=headers)
+    time.sleep(DELAY)
+    if response.status_code == 200:
+        data = response.json()
+        return data["quote"].get("ap"), data["quote"].get("bp")
+    else:
+        print(f"Error fetching price for {symbol}: {response.text}")
         return None, None
-
-def fetch_rsi(symbol):
-    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/indicators/rsi?timeframe=1Hour&window=14"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    try:
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        rsi = r.json()["rsi"][-1]
-        return rsi
-    except:
-        return None
-
-def fetch_volume(symbol):
-    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars/latest?timeframe=1Min"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    try:
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        data = r.json()["bar"]
-        return data["v"]
-    except:
-        return None
-
-def fetch_avg_volume(symbol):
-    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars?timeframe=1Min&limit=50"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    try:
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        bars = r.json()["bars"]
-        return sum(bar["v"] for bar in bars) / len(bars)
-    except:
-        return None
 
 def insert_trade(ticker, entry, exit, profit):
     global daily_profit
@@ -94,7 +53,10 @@ def insert_trade(ticker, entry, exit, profit):
         "Authorization": f"Bearer {SUPABASE_API_KEY}",
         "Content-Type": "application/json"
     }
-    requests.post(f"{SUPABASE_URL}/rest/v1/trades", json=payload, headers=headers)
+    url = f"{SUPABASE_URL}/rest/v1/trades"
+    r = requests.post(url, json=payload, headers=headers)
+    if r.status_code not in [200, 201]:
+        print("Error inserting trade:", r.text)
 
 def load_all_tickers():
     global ALL_TICKERS
@@ -103,84 +65,75 @@ def load_all_tickers():
         "APCA-API-KEY-ID": ALPACA_API_KEY,
         "APCA-API-SECRET-KEY": ALPACA_API_SECRET
     }
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        ALL_TICKERS = [a["symbol"] for a in r.json() if a["tradable"] and a["exchange"] in ["NYSE", "NASDAQ"]]
-        print(f"Loaded {len(ALL_TICKERS)} tradable tickers")
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        ALL_TICKERS = [asset['symbol'] for asset in data if asset['tradable'] and asset['exchange'] in ["NASDAQ", "NYSE"]]
+        print(f"Loaded {len(ALL_TICKERS)} tradable tickers from Alpaca.")
     else:
-        print("Failed to load tickers")
+        print("Failed to load tickers from Alpaca:", response.text)
 
 def simulate_trade():
     global POSITIONS, daily_profit
-    if daily_profit <= DAILY_LOSS_LIMIT:
-        print("🔴 Daily loss limit reached. Trading paused.")
-        return
-
     for ticker in list(POSITIONS):
-        pos = POSITIONS[ticker]
+        position = POSITIONS[ticker]
         current_price, _ = fetch_price(ticker)
         if not current_price:
             continue
 
-        entry = pos["entry_price"]
-        change = (current_price - entry) / entry
+        entry_price = position['entry_price']
+        percent_change = (current_price - entry_price) / entry_price
 
-        if change < 0:
-            pos["cumulative_loss"] += abs(change)
+        if percent_change < 0:
+            position['cumulative_loss'] += abs(percent_change)
 
-        if change >= 0.005 and not pos.get("break_even"):
-            pos["break_even"] = True
+        if percent_change >= 0.005 and not position.get('break_even_triggered', False):
+            position['break_even_triggered'] = True
 
-        rsi = fetch_rsi(ticker)
-        reason, sell = None, False
-
-        if pos["cumulative_loss"] >= 0.005:
-            reason, sell = "Cumulative stop loss", True
-        elif rsi and rsi > 80:
-            reason, sell = "RSI > 80", True
-        elif pos.get("break_even") and current_price < entry:
-            reason, sell = "Break-even stop hit", True
+        if position['break_even_triggered'] and current_price <= entry_price:
+            sell = True
+            reason = "Break-even stop triggered"
+        elif position['cumulative_loss'] >= 0.005:
+            sell = True
+            reason = "Cumulative stop loss triggered"
+        else:
+            sell = False
+            reason = None
 
         if sell:
-            profit = current_price - entry
-            insert_trade(ticker, entry, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, PnL: {profit:.2f} | {reason}")
+            profit = current_price - entry_price
+            insert_trade(ticker, entry_price, current_price, profit)
+            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%) | {reason}")
             del POSITIONS[ticker]
         else:
-            print(f"{ticker} holding: {change*100:.2f}%")
-
+            print(f"{ticker} holding, change: {percent_change*100:.2f}%")
         time.sleep(DELAY)
 
-    while len(POSITIONS) < MAX_OPEN_POSITIONS:
+    attempts = 0
+    while len(POSITIONS) < MAX_OPEN_POSITIONS and attempts < 100 and daily_profit > DAILY_LOSS_CAP:
         ticker = random.choice(ALL_TICKERS)
         if ticker in POSITIONS:
+            attempts += 1
             continue
-
-        open_price, prev_price = fetch_price(ticker)
-        if not open_price or not prev_price or prev_price == 0:
-            continue
-
-        change = (open_price - prev_price) / prev_price
-        if change < 0.01:
-            continue
-
-        vol = fetch_volume(ticker)
-        avg_vol = fetch_avg_volume(ticker)
-        if not vol or not avg_vol or vol < avg_vol:
-            continue
-
-        POSITIONS[ticker] = {
-            "entry_price": open_price,
-            "cumulative_loss": 0,
-            "break_even": False
-        }
-        print(f"{ticker}: BOUGHT at {open_price:.2f}")
+        entry_price, _ = fetch_price(ticker)
+        if entry_price:
+            POSITIONS[ticker] = {
+                'entry_price': entry_price,
+                'last_price': entry_price,
+                'trail_active': False,
+                'peak_price': entry_price,
+                'cumulative_loss': 0,
+                'break_even_triggered': False
+            }
+            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+        attempts += 1
         time.sleep(DELAY)
 
 if __name__ == "__main__":
-    print("🚀 Loading tickers...")
+    print("Loading tickers...")
     load_all_tickers()
-    print("🤖 Trading bot started...")
+    print("AI Trading bot started...")
+
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
