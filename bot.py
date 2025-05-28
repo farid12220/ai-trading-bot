@@ -15,11 +15,12 @@ SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
 DELAY = 0.3
+DAILY_LOSS_CAP = -100
 
 ALL_TICKERS = []
 POSITIONS = {}
 DAILY_PROFIT = 0
-DAILY_LOSS_LIMIT = -100
+CURRENT_DATE = datetime.date.today()
 
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
@@ -35,18 +36,6 @@ def fetch_price(symbol):
     else:
         print(f"Error fetching price for {symbol}: {response.text}")
         return None, None
-
-def fetch_volume(symbol):
-    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/bars?timeframe=1Min&limit=1"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        bars = response.json().get("bars", [])
-        return bars[0]["v"] if bars else 0
-    return 0
 
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
@@ -86,10 +75,13 @@ def load_all_tickers():
         print("Failed to load tickers from Alpaca:", response.text)
 
 def simulate_trade():
-    global POSITIONS, DAILY_PROFIT
+    global POSITIONS, DAILY_PROFIT, CURRENT_DATE
+    if datetime.date.today() != CURRENT_DATE:
+        DAILY_PROFIT = 0
+        CURRENT_DATE = datetime.date.today()
 
-    if DAILY_PROFIT <= DAILY_LOSS_LIMIT:
-        print("🔻 Daily loss limit reached. Trading halted.")
+    if DAILY_PROFIT <= DAILY_LOSS_CAP:
+        print("Daily loss limit reached. Pausing trading.")
         return
 
     for ticker in list(POSITIONS):
@@ -101,30 +93,16 @@ def simulate_trade():
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
 
-        if percent_change >= 0.005 and not position['breakeven_set']:
-            position['stop_loss'] = entry_price
-            position['breakeven_set'] = True
-
-        if percent_change >= 0.01:
-            if not position['trail_active']:
-                position['trail_active'] = True
-                position['peak_price'] = current_price
-            else:
-                position['peak_price'] = max(position['peak_price'], current_price)
-
-        if percent_change <= -0.005:
+        if percent_change < 0:
             position['cumulative_loss'] += abs(percent_change)
-            if position['cumulative_loss'] >= 0.005:
-                sell = True
-                reason = "Cumulative stop loss triggered"
-            else:
-                sell = False
-                reason = None
-        elif position['trail_active']:
-            drop_from_peak = (position['peak_price'] - current_price) / position['peak_price']
-            sell = drop_from_peak >= 0.005
-            reason = "Trailing stop hit" if sell else None
-        elif position['breakeven_set'] and current_price <= position['stop_loss']:
+
+        if percent_change >= 0.005 and not position.get('breakeven_activated'):
+            position['breakeven_activated'] = True
+
+        if position['cumulative_loss'] >= 0.005:
+            sell = True
+            reason = "Cumulative stop loss triggered"
+        elif position.get('breakeven_activated') and current_price <= entry_price:
             sell = True
             reason = "Breakeven stop triggered"
         else:
@@ -134,7 +112,7 @@ def simulate_trade():
         if sell:
             profit = current_price - entry_price
             insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} | {reason}")
+            print(f"{ticker}: SOLD at {current_price:.2f}, Profit: {profit:.2f} ({percent_change*100:.2f}%) | {reason}")
             del POSITIONS[ticker]
         else:
             print(f"{ticker} holding, change: {percent_change*100:.2f}%")
@@ -144,19 +122,13 @@ def simulate_trade():
         ticker = random.choice(ALL_TICKERS)
         if ticker in POSITIONS:
             continue
-        volume = fetch_volume(ticker)
-        if volume < 50000:
-            continue
         entry_price, _ = fetch_price(ticker)
         if entry_price:
             POSITIONS[ticker] = {
                 'entry_price': entry_price,
                 'last_price': entry_price,
-                'trail_active': False,
-                'peak_price': entry_price,
                 'cumulative_loss': 0,
-                'breakeven_set': False,
-                'stop_loss': None
+                'breakeven_activated': False
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
         time.sleep(DELAY)
