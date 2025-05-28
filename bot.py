@@ -14,25 +14,33 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
-DELAY = 0.3
+MIN_VOLUME = 500000
 
 ALL_TICKERS = []
+TOP_PERFORMERS = []
 POSITIONS = {}
 
-def fetch_price(symbol):
+def get_holding_limit(price):
+    if price >= 150:
+        return 5
+    elif price >= 50:
+        return 8
+    else:
+        return 12
+
+def fetch_price_and_volume(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
     headers = {
         "APCA-API-KEY-ID": ALPACA_API_KEY,
         "APCA-API-SECRET-KEY": ALPACA_API_SECRET
     }
     response = requests.get(url, headers=headers)
-    time.sleep(DELAY)
     if response.status_code == 200:
         data = response.json()
-        return data["quote"].get("ap"), data["quote"].get("bp")
+        return data["quote"].get("ap"), data["quote"].get("bp"), data["quote"].get("v", 0)
     else:
-        print(f"Error fetching price for {symbol}: {response.text}")
-        return None, None
+        print(f"Error fetching price/volume for {symbol}: {response.text}")
+        return None, None, 0
 
 def insert_trade(ticker, entry, exit, profit):
     payload = {
@@ -69,11 +77,26 @@ def load_all_tickers():
     else:
         print("Failed to load tickers from Alpaca:", response.text)
 
+def update_top_performers():
+    global TOP_PERFORMERS
+    print("Scanning top-performing stocks...")
+    sample = random.sample(ALL_TICKERS, min(100, len(ALL_TICKERS)))
+    gainers = []
+    for symbol in sample:
+        current, previous, volume = fetch_price_and_volume(symbol)
+        if current and previous and previous > 0 and volume >= MIN_VOLUME:
+            change = (current - previous) / previous
+            gainers.append((symbol, change))
+        time.sleep(0.1)
+    gainers.sort(key=lambda x: x[1], reverse=True)
+    TOP_PERFORMERS = [g[0] for g in gainers[:10]]
+    print(f"Top performers: {TOP_PERFORMERS}")
+
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
         position = POSITIONS[ticker]
-        current_price, _ = fetch_price(ticker)
+        current_price, _, _ = fetch_price_and_volume(ticker)
         if not current_price:
             continue
 
@@ -84,17 +107,12 @@ def simulate_trade():
             if not position['trail_active']:
                 position['trail_active'] = True
                 position['peak_price'] = current_price
-            else:
-                position['peak_price'] = max(position['peak_price'], current_price)
+        if position['trail_active']:
+            position['peak_price'] = max(position['peak_price'], current_price)
 
         if percent_change <= -0.005:
-            position['cumulative_loss'] += abs(percent_change)
-            if position['cumulative_loss'] >= 0.005:
-                sell = True
-                reason = "Cumulative stop loss triggered"
-            else:
-                sell = False
-                reason = None
+            reason = "Stop loss triggered"
+            sell = True
         elif position['trail_active']:
             drop_from_peak = (position['peak_price'] - current_price) / position['peak_price']
             sell = drop_from_peak >= 0.005
@@ -110,29 +128,28 @@ def simulate_trade():
             del POSITIONS[ticker]
         else:
             print(f"{ticker} holding, change: {percent_change*100:.2f}%")
-        time.sleep(DELAY)
+        time.sleep(0.1)
 
-    while len(POSITIONS) < MAX_OPEN_POSITIONS:
-        ticker = random.choice(ALL_TICKERS)
-        if ticker in POSITIONS:
-            continue
-        entry_price, _ = fetch_price(ticker)
-        if entry_price:
+    if len(POSITIONS) < MAX_OPEN_POSITIONS and TOP_PERFORMERS:
+        ticker = random.choice(TOP_PERFORMERS)
+        entry_price, _, volume = fetch_price_and_volume(ticker)
+        if entry_price and volume >= MIN_VOLUME:
             POSITIONS[ticker] = {
                 'entry_price': entry_price,
                 'last_price': entry_price,
                 'trail_active': False,
-                'peak_price': entry_price,
-                'cumulative_loss': 0
+                'peak_price': entry_price
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
-        time.sleep(DELAY)
 
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
+    update_top_performers()
     print("AI Trading bot started...")
 
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
+        if int(time.time()) % 60 == 0:
+            update_top_performers()
