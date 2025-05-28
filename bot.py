@@ -6,7 +6,6 @@ import datetime
 import random
 
 # === CONFIG ===
-CUMULATIVE_STOP_LOSS = -0.005
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
@@ -80,7 +79,6 @@ def simulate_trade():
 
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
-        position['cumulative_loss'] += percent_change if percent_change < 0 else 0
 
         if percent_change >= 0.01:
             if not position['trail_active']:
@@ -89,9 +87,14 @@ def simulate_trade():
             else:
                 position['peak_price'] = max(position['peak_price'], current_price)
 
-        if percent_change <= -0.005 or position['cumulative_loss'] <= CUMULATIVE_STOP_LOSS:
-            reason = "Stop loss triggered"
-            sell = True
+        if percent_change <= -0.005:
+            position['cumulative_loss'] += abs(percent_change)
+            if position['cumulative_loss'] >= 0.005:
+                sell = True
+                reason = "Cumulative stop loss triggered"
+            else:
+                sell = False
+                reason = None
         elif position['trail_active']:
             drop_from_peak = (position['peak_price'] - current_price) / position['peak_price']
             sell = drop_from_peak >= 0.005
@@ -120,7 +123,7 @@ def simulate_trade():
                 'last_price': entry_price,
                 'trail_active': False,
                 'peak_price': entry_price,
-                'cumulative_loss': 0.0
+                'cumulative_loss': 0
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
         time.sleep(DELAY)
@@ -133,4 +136,3 @@ if __name__ == "__main__":
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-
