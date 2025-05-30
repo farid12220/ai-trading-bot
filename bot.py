@@ -16,14 +16,11 @@ SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
 DELAY = 0.3
-MOMENTUM_WINDOW_MINUTES = 15
-MOMENTUM_THRESHOLD = 0.02
 DAILY_LOSS_CAP = -100
 
 ALL_TICKERS = []
 POSITIONS = {}
 DAILY_PROFIT = 0
-
 
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
@@ -39,7 +36,6 @@ def fetch_price(symbol):
     else:
         print(f"Error fetching price for {symbol}: {response.text}")
         return None, None
-
 
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
@@ -63,7 +59,6 @@ def insert_trade(ticker, entry, exit, profit):
     if r.status_code not in [200, 201]:
         print("Error inserting trade:", r.text)
 
-
 def load_all_tickers():
     global ALL_TICKERS
     url = f"{ALPACA_BASE_URL}/v2/assets"
@@ -79,14 +74,12 @@ def load_all_tickers():
     else:
         print("Failed to load tickers from Alpaca:", response.text)
 
-
 def market_is_open():
     eastern = pytz.timezone("US/Eastern")
     now_et = datetime.datetime.now(eastern)
     market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
     return market_open <= now_et <= market_close
-
 
 def simulate_trade():
     global POSITIONS
@@ -99,9 +92,11 @@ def simulate_trade():
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
 
+        # Track cumulative loss
         if percent_change < 0:
             position['cumulative_loss'] += abs(percent_change)
 
+        # Trailing logic
         if percent_change >= 0.01:
             if not position['trail_active']:
                 position['trail_active'] = True
@@ -109,11 +104,13 @@ def simulate_trade():
             else:
                 position['peak_price'] = max(position['peak_price'], current_price)
 
-        if percent_change >= 0.005 and not position['break_even']:
+        # Break-even logic
+        if percent_change >= 0.008 and not position['break_even']:
             position['break_even'] = True
 
-        stop_loss_triggered = position['cumulative_loss'] >= 0.005
-        trailing_stop_triggered = position['trail_active'] and (position['peak_price'] - current_price) / position['peak_price'] >= 0.005
+        stop_loss_triggered = position['cumulative_loss'] >= 0.0075
+        trailing_stop_triggered = position['trail_active'] and (
+            (position['peak_price'] - current_price) / position['peak_price'] >= 0.0075)
         break_even_triggered = position['break_even'] and current_price < entry_price
 
         sell = stop_loss_triggered or trailing_stop_triggered or break_even_triggered
@@ -154,7 +151,6 @@ def simulate_trade():
             }
             print(f"{ticker}: BOUGHT at {entry_price:.2f}")
         time.sleep(DELAY)
-
 
 if __name__ == "__main__":
     print("Loading tickers...")
