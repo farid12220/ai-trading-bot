@@ -64,7 +64,7 @@ def insert_trade(ticker, entry, exit, profit):
         "exit_price": exit,
         "profit": profit,
         "result": "WIN" if profit >= 0 else "LOSS",
-        "timestamp": datetime.datetime.now(datetime.UTC).isoformat()
+        "timestamp": datetime.datetime.utcnow().isoformat()
     }
     headers = {
         "apikey": SUPABASE_API_KEY,
