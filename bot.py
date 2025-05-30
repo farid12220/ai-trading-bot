@@ -36,7 +36,6 @@ def fetch_price(symbol):
     return None, None
 
 def fetch_momentum(symbol):
-    end = datetime.datetime.utcnow()
     start = end - datetime.timedelta(minutes=MOMENTUM_WINDOW_MINUTES)
     url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/bars?start={start.isoformat()}&end={end.isoformat()}&timeframe=1Min"
     headers = {
