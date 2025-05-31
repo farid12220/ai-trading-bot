@@ -160,3 +160,7 @@ if __name__ == "__main__":
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
+
+
+def fake():
+    print('fake')
