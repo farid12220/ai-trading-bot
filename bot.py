@@ -69,7 +69,7 @@ def fetch_vwap(symbol):
     total_vwap = sum((b['h'] + b['l'] + b['c']) / 3 * b['v'] for b in bars)
     return total_vwap / total_vol if total_vol else None
 
-def fetch_recent_candles(symbol, limit=5):
+def fetch_recent_candles(symbol, limit=6):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars?timeframe=1Min&limit={limit}"
     headers = {
         "APCA-API-KEY-ID": ALPACA_API_KEY,
@@ -82,7 +82,6 @@ def fetch_recent_candles(symbol, limit=5):
     else:
         return None
 
-# === PATTERNS ===
 def is_hammer(candle):
     body = abs(candle['c'] - candle['o'])
     lower_wick = candle['o'] - candle['l'] if candle['o'] > candle['c'] else candle['c'] - candle['l']
@@ -129,6 +128,18 @@ def is_inside_bar(candles):
     prev, curr = candles[-2], candles[-1]
     return curr['h'] < prev['h'] and curr['l'] > prev['l']
 
+def is_breakout_retest(candles):
+    if len(candles) < 6:
+        return False
+    breakout = candles[-6]
+    pullback = candles[-5:-1]
+    current = candles[-1]
+    if breakout['c'] <= breakout['o']:
+        return False
+    if any(c['l'] < breakout['h'] for c in pullback):
+        return False
+    return current['c'] > breakout['h']
+
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -163,10 +174,8 @@ def simulate_trade():
         current_price, _ = fetch_price(ticker)
         if not current_price:
             continue
-
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
-
         if percent_change < 0:
             position['cumulative_loss'] += abs(percent_change)
         if percent_change >= 0.01:
@@ -177,11 +186,9 @@ def simulate_trade():
                 position['peak_price'] = max(position['peak_price'], current_price)
         if percent_change >= 0.008 and not position['break_even']:
             position['break_even'] = True
-
         stop = position['cumulative_loss'] >= 0.0075
         trail = position['trail_active'] and (position['peak_price'] - current_price) / position['peak_price'] >= 0.0075
         break_even = position['break_even'] and current_price < entry_price
-
         if stop or trail or break_even:
             profit = current_price - entry_price
             insert_trade(ticker, entry_price, current_price, profit)
@@ -195,10 +202,9 @@ def simulate_trade():
         ticker = random.choice(ALL_TICKERS)
         if ticker in POSITIONS:
             continue
-        candles = fetch_recent_candles(ticker, limit=5)
+        candles = fetch_recent_candles(ticker, limit=6)
         if not candles or len(candles) < 3:
             continue
-
         pattern = None
         if is_hammer(candles[-1]):
             pattern = "Hammer"
@@ -210,6 +216,8 @@ def simulate_trade():
             pattern = "3-Bar Play"
         elif is_inside_bar(candles):
             pattern = "Inside Bar"
+        elif is_breakout_retest(candles):
+            pattern = "Breakout + Retest"
 
         if not pattern:
             continue
@@ -220,7 +228,6 @@ def simulate_trade():
             continue
         if abs(entry_price - vwap) / vwap > VWAP_TOLERANCE:
             continue
-
         avg_volume = sum(c['v'] for c in candles[:-1]) / (len(candles) - 1)
         if candles[-1]['v'] < avg_volume:
             continue
