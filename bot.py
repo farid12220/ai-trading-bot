@@ -6,28 +6,23 @@ import datetime
 import random
 import pytz
 
-# === CONFIGURATION ===
-# Load credentials and config from environment variables
+# === CONFIG ===
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
 ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-
-# Strategy parameters
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
 DELAY = 0.3
 DAILY_LOSS_CAP = -100
-VWAP_TOLERANCE = 0.005  # 0.5% proximity threshold to VWAP
+VWAP_TOLERANCE = 0.005
 
-# Globals
 ALL_TICKERS = []
 POSITIONS = {}
 DAILY_PROFIT = 0
 
-# === TICKER LOADING ===
 def load_all_tickers():
     global ALL_TICKERS
     url = f"{ALPACA_BASE_URL}/v2/assets"
@@ -43,7 +38,6 @@ def load_all_tickers():
     else:
         print("Failed to load tickers from Alpaca:", response.text)
 
-# === PRICE + VWAP ===
 def fetch_price(symbol):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
     headers = {
@@ -129,7 +123,12 @@ def is_3_bar_play(candles):
         return False
     return c3['c'] > max(c1['h'], c2['h'])
 
-# === LOGGING ===
+def is_inside_bar(candles):
+    if len(candles) < 2:
+        return False
+    prev, curr = candles[-2], candles[-1]
+    return curr['h'] < prev['h'] and curr['l'] > prev['l']
+
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -150,7 +149,6 @@ def insert_trade(ticker, entry, exit, profit):
     url = f"{SUPABASE_URL}/rest/v1/trades"
     requests.post(url, json=payload, headers=headers)
 
-# === SCHEDULE ===
 def market_is_open():
     eastern = pytz.timezone("US/Eastern")
     now_et = datetime.datetime.now(eastern)
@@ -158,7 +156,6 @@ def market_is_open():
     market_close = now_et.replace(hour=16, minute=0, microsecond=0)
     return market_open <= now_et <= market_close
 
-# === MAIN BOT LOOP ===
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
@@ -186,15 +183,12 @@ def simulate_trade():
         break_even = position['break_even'] and current_price < entry_price
 
         if stop or trail or break_even:
-            reason = "stop" if stop else "trail" if trail else "break-even"
             profit = current_price - entry_price
             insert_trade(ticker, entry_price, current_price, profit)
-            print(f"{ticker}: SOLD at {current_price:.2f} ({reason})")
             del POSITIONS[ticker]
         time.sleep(DELAY)
 
     if not market_is_open() or DAILY_PROFIT <= DAILY_LOSS_CAP:
-        print("Skipping buys (market closed or loss cap hit)")
         return
 
     while len(POSITIONS) < MAX_OPEN_POSITIONS:
@@ -214,6 +208,8 @@ def simulate_trade():
             pattern = "Marubozu"
         elif is_3_bar_play(candles):
             pattern = "3-Bar Play"
+        elif is_inside_bar(candles):
+            pattern = "Inside Bar"
 
         if not pattern:
             continue
@@ -222,7 +218,6 @@ def simulate_trade():
         vwap = fetch_vwap(ticker)
         if not entry_price or not vwap:
             continue
-
         if abs(entry_price - vwap) / vwap > VWAP_TOLERANCE:
             continue
 
@@ -241,7 +236,6 @@ def simulate_trade():
         print(f"{ticker}: BOUGHT at {entry_price:.2f} on {pattern}")
         time.sleep(DELAY)
 
-# === ENTRY POINT ===
 if __name__ == "__main__":
     print("Loading tickers...")
     load_all_tickers()
