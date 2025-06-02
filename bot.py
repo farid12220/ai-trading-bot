@@ -58,6 +58,14 @@ def is_hammer(candle):
     upper_wick = candle['h'] - candle['c'] if candle['o'] > candle['c'] else candle['h'] - candle['o']
     return body < (candle['h'] - candle['l']) * 0.3 and lower_wick > body * 2 and upper_wick < body
 
+def is_bullish_engulfing(prev, curr):
+    return (
+        prev['c'] < prev['o'] and  # previous is red
+        curr['c'] > curr['o'] and  # current is green
+        curr['o'] < prev['c'] and  # current open < previous close
+        curr['c'] > prev['o']      # current close > previous open
+    )
+
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -159,18 +167,26 @@ def simulate_trade():
             continue
 
         candles = fetch_recent_candles(ticker, limit=3)
-        if candles and is_hammer(candles[-1]):
-            entry_price, _ = fetch_price(ticker)
-            if entry_price:
-                POSITIONS[ticker] = {
-                    'entry_price': entry_price,
-                    'last_price': entry_price,
-                    'trail_active': False,
-                    'peak_price': entry_price,
-                    'cumulative_loss': 0,
-                    'break_even': False
-                }
-                print(f"{ticker}: BOUGHT at {entry_price:.2f} based on Hammer pattern")
+        if len(candles) >= 2:
+            if is_hammer(candles[-1]):
+                pattern = "Hammer"
+            elif is_bullish_engulfing(candles[-2], candles[-1]):
+                pattern = "Bullish Engulfing"
+            else:
+                pattern = None
+
+            if pattern:
+                entry_price, _ = fetch_price(ticker)
+                if entry_price:
+                    POSITIONS[ticker] = {
+                        'entry_price': entry_price,
+                        'last_price': entry_price,
+                        'trail_active': False,
+                        'peak_price': entry_price,
+                        'cumulative_loss': 0,
+                        'break_even': False
+                    }
+                    print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} pattern")
         time.sleep(DELAY)
 
 if __name__ == "__main__":
