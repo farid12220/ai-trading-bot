@@ -37,6 +37,26 @@ def fetch_price(symbol):
         print(f"Error fetching price for {symbol}: {response.text}")
         return None, None
 
+def fetch_recent_candles(symbol, limit=5):
+    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/bars?timeframe=1Min&limit={limit}"
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    }
+    r = requests.get(url, headers=headers)
+    time.sleep(DELAY)
+    if r.status_code == 200:
+        return r.json().get("bars", [])
+    else:
+        print(f"Error fetching candles for {symbol}: {r.text}")
+        return []
+
+def is_hammer(candle):
+    body = abs(candle['c'] - candle['o'])
+    lower_wick = candle['o'] - candle['l'] if candle['o'] > candle['c'] else candle['c'] - candle['l']
+    upper_wick = candle['h'] - candle['c'] if candle['o'] > candle['c'] else candle['h'] - candle['o']
+    return body < (candle['h'] - candle['l']) * 0.3 and lower_wick > body * 2 and upper_wick < body
+
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -78,7 +98,7 @@ def market_is_open():
     eastern = pytz.timezone("US/Eastern")
     now_et = datetime.datetime.now(eastern)
     market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, microsecond=0)
     return market_open <= now_et <= market_close
 
 def simulate_trade():
@@ -92,11 +112,9 @@ def simulate_trade():
         entry_price = position['entry_price']
         percent_change = (current_price - entry_price) / entry_price
 
-        # Track cumulative loss
         if percent_change < 0:
             position['cumulative_loss'] += abs(percent_change)
 
-        # Trailing logic
         if percent_change >= 0.01:
             if not position['trail_active']:
                 position['trail_active'] = True
@@ -104,7 +122,6 @@ def simulate_trade():
             else:
                 position['peak_price'] = max(position['peak_price'], current_price)
 
-        # Break-even logic
         if percent_change >= 0.008 and not position['break_even']:
             position['break_even'] = True
 
@@ -139,17 +156,20 @@ def simulate_trade():
         ticker = random.choice(ALL_TICKERS)
         if ticker in POSITIONS:
             continue
-        entry_price, _ = fetch_price(ticker)
-        if entry_price:
-            POSITIONS[ticker] = {
-                'entry_price': entry_price,
-                'last_price': entry_price,
-                'trail_active': False,
-                'peak_price': entry_price,
-                'cumulative_loss': 0,
-                'break_even': False
-            }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f}")
+
+        candles = fetch_recent_candles(ticker, limit=3)
+        if candles and is_hammer(candles[-1]):
+            entry_price, _ = fetch_price(ticker)
+            if entry_price:
+                POSITIONS[ticker] = {
+                    'entry_price': entry_price,
+                    'last_price': entry_price,
+                    'trail_active': False,
+                    'peak_price': entry_price,
+                    'cumulative_loss': 0,
+                    'break_even': False
+                }
+                print(f"{ticker}: BOUGHT at {entry_price:.2f} based on Hammer pattern")
         time.sleep(DELAY)
 
 if __name__ == "__main__":
@@ -160,7 +180,3 @@ if __name__ == "__main__":
     while True:
         simulate_trade()
         time.sleep(TRADE_INTERVAL)
-
-
-def fake():
-    print('fake')
