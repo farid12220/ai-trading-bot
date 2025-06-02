@@ -10,13 +10,14 @@ import pytz
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
-ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")  # e.g., https://data.alpaca.markets/v2
+ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
 MAX_OPEN_POSITIONS = 50
 DELAY = 0.3
 DAILY_LOSS_CAP = -100
+VWAP_TOLERANCE = 0.005  # 0.5%
 
 ALL_TICKERS = []
 POSITIONS = {}
@@ -36,6 +37,23 @@ def fetch_price(symbol):
     else:
         print(f"Error fetching price for {symbol}: {response.text}")
         return None, None
+
+def fetch_vwap(symbol):
+    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars?timeframe=1Min&limit=20"
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_API_SECRET
+    }
+    r = requests.get(url, headers=headers)
+    time.sleep(DELAY)
+    if r.status_code != 200:
+        return None
+    bars = r.json().get("bars", [])
+    if not bars:
+        return None
+    total_vol = sum(b['v'] for b in bars)
+    total_vwap = sum((b['h'] + b['l'] + b['c']) / 3 * b['v'] for b in bars)
+    return total_vwap / total_vol if total_vol else None
 
 def fetch_recent_candles(symbol, limit=5):
     url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars?timeframe=1Min&limit={limit}"
@@ -60,10 +78,10 @@ def is_hammer(candle):
 
 def is_bullish_engulfing(prev, curr):
     return (
-        prev['c'] < prev['o'] and  # previous is red
-        curr['c'] > curr['o'] and  # current is green
-        curr['o'] < prev['c'] and  # current open < previous close
-        curr['c'] > prev['o']      # current close > previous open
+        prev['c'] < prev['o'] and
+        curr['c'] > curr['o'] and
+        curr['o'] < prev['c'] and
+        curr['c'] > prev['o']
     )
 
 def insert_trade(ticker, entry, exit, profit):
@@ -179,16 +197,25 @@ def simulate_trade():
 
         if pattern:
             entry_price, _ = fetch_price(ticker)
-            if entry_price:
-                POSITIONS[ticker] = {
-                    'entry_price': entry_price,
-                    'last_price': entry_price,
-                    'trail_active': False,
-                    'peak_price': entry_price,
-                    'cumulative_loss': 0,
-                    'break_even': False
-                }
-                print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} pattern")
+            vwap = fetch_vwap(ticker)
+
+            if not entry_price or not vwap:
+                continue
+
+            distance_from_vwap = abs(entry_price - vwap) / vwap
+            if distance_from_vwap > VWAP_TOLERANCE:
+                print(f"{ticker}: Rejected {pattern} — too far from VWAP ({distance_from_vwap:.3%})")
+                continue
+
+            POSITIONS[ticker] = {
+                'entry_price': entry_price,
+                'last_price': entry_price,
+                'trail_active': False,
+                'peak_price': entry_price,
+                'cumulative_loss': 0,
+                'break_even': False
+            }
+            print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} near VWAP ({vwap:.2f})")
         time.sleep(DELAY)
 
 if __name__ == "__main__":
