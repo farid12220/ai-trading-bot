@@ -184,7 +184,7 @@ def simulate_trade():
         if ticker in POSITIONS:
             continue
 
-        candles = fetch_recent_candles(ticker, limit=3)
+        candles = fetch_recent_candles(ticker, limit=5)
         if not candles or len(candles) < 2:
             continue
 
@@ -195,27 +195,36 @@ def simulate_trade():
         else:
             pattern = None
 
-        if pattern:
-            entry_price, _ = fetch_price(ticker)
-            vwap = fetch_vwap(ticker)
+        if not pattern:
+            continue
 
-            if not entry_price or not vwap:
-                continue
+        entry_price, _ = fetch_price(ticker)
+        vwap = fetch_vwap(ticker)
 
-            distance_from_vwap = abs(entry_price - vwap) / vwap
-            if distance_from_vwap > VWAP_TOLERANCE:
-                print(f"{ticker}: Rejected {pattern} — too far from VWAP ({distance_from_vwap:.3%})")
-                continue
+        if not entry_price or not vwap:
+            continue
 
-            POSITIONS[ticker] = {
-                'entry_price': entry_price,
-                'last_price': entry_price,
-                'trail_active': False,
-                'peak_price': entry_price,
-                'cumulative_loss': 0,
-                'break_even': False
-            }
-            print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} near VWAP ({vwap:.2f})")
+        distance_from_vwap = abs(entry_price - vwap) / vwap
+        if distance_from_vwap > VWAP_TOLERANCE:
+            print(f"{ticker}: Rejected {pattern} — too far from VWAP ({distance_from_vwap:.3%})")
+            continue
+
+        # Volume confirmation
+        avg_volume = sum(c['v'] for c in candles[:-1]) / (len(candles) - 1)
+        last_volume = candles[-1]['v']
+        if last_volume < avg_volume:
+            print(f"{ticker}: Rejected {pattern} — weak volume ({last_volume} < avg {avg_volume:.1f})")
+            continue
+
+        POSITIONS[ticker] = {
+            'entry_price': entry_price,
+            'last_price': entry_price,
+            'trail_active': False,
+            'peak_price': entry_price,
+            'cumulative_loss': 0,
+            'break_even': False
+        }
+        print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} near VWAP with strong volume")
         time.sleep(DELAY)
 
 if __name__ == "__main__":
