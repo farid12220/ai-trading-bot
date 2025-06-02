@@ -84,6 +84,17 @@ def is_bullish_engulfing(prev, curr):
         curr['c'] > prev['o']
     )
 
+def is_marubozu(candle):
+    body = abs(candle['c'] - candle['o'])
+    total_range = candle['h'] - candle['l']
+    upper_wick = candle['h'] - max(candle['c'], candle['o'])
+    lower_wick = min(candle['c'], candle['o']) - candle['l']
+    return (
+        body / total_range > 0.9 and
+        upper_wick / total_range < 0.05 and
+        lower_wick / total_range < 0.05
+    )
+
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -188,12 +199,13 @@ def simulate_trade():
         if not candles or len(candles) < 2:
             continue
 
+        pattern = None
         if is_hammer(candles[-1]):
             pattern = "Hammer"
         elif is_bullish_engulfing(candles[-2], candles[-1]):
             pattern = "Bullish Engulfing"
-        else:
-            pattern = None
+        elif is_marubozu(candles[-1]):
+            pattern = "Marubozu"
 
         if not pattern:
             continue
@@ -209,7 +221,6 @@ def simulate_trade():
             print(f"{ticker}: Rejected {pattern} — too far from VWAP ({distance_from_vwap:.3%})")
             continue
 
-        # Volume confirmation
         avg_volume = sum(c['v'] for c in candles[:-1]) / (len(candles) - 1)
         last_volume = candles[-1]['v']
         if last_volume < avg_volume:
