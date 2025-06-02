@@ -10,7 +10,7 @@ import pytz
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
-ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")  # should be: https://data.alpaca.markets
+ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")  # should be: https://data.alpaca.markets/v2
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
@@ -23,7 +23,7 @@ POSITIONS = {}
 DAILY_PROFIT = 0
 
 def fetch_price(symbol):
-    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/quotes/latest"
+    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/quotes/latest"
     headers = {
         "APCA-API-KEY-ID": ALPACA_API_KEY,
         "APCA-API-SECRET-KEY": ALPACA_API_SECRET
@@ -38,7 +38,7 @@ def fetch_price(symbol):
         return None, None
 
 def fetch_recent_candles(symbol, limit=5):
-    url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/bars?timeframe=1Min&limit={limit}"
+    url = f"{ALPACA_DATA_URL}/stocks/{symbol}/bars?timeframe=1Min&limit={limit}"
     print(f"Requesting: {url}")
     headers = {
         "APCA-API-KEY-ID": ALPACA_API_KEY,
