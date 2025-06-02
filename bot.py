@@ -87,6 +87,8 @@ def is_bullish_engulfing(prev, curr):
 def is_marubozu(candle):
     body = abs(candle['c'] - candle['o'])
     total_range = candle['h'] - candle['l']
+    if total_range == 0:
+        return False
     upper_wick = candle['h'] - max(candle['c'], candle['o'])
     lower_wick = min(candle['c'], candle['o']) - candle['l']
     return (
