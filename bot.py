@@ -10,7 +10,7 @@ import pytz
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.environ.get("ALPACA_API_SECRET")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL")
-ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")  # should be: https://data.alpaca.markets/v2
+ALPACA_DATA_URL = os.environ.get("ALPACA_DATA_URL")  # e.g., https://data.alpaca.markets/v2
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 TRADE_INTERVAL = 5
@@ -50,7 +50,7 @@ def fetch_recent_candles(symbol, limit=5):
         return r.json().get("bars", [])
     else:
         print(f"Error fetching candles for {symbol}: {r.text}")
-        return []
+        return None
 
 def is_hammer(candle):
     body = abs(candle['c'] - candle['o'])
@@ -167,26 +167,28 @@ def simulate_trade():
             continue
 
         candles = fetch_recent_candles(ticker, limit=3)
-        if len(candles) >= 2:
-            if is_hammer(candles[-1]):
-                pattern = "Hammer"
-            elif is_bullish_engulfing(candles[-2], candles[-1]):
-                pattern = "Bullish Engulfing"
-            else:
-                pattern = None
+        if not candles or len(candles) < 2:
+            continue
 
-            if pattern:
-                entry_price, _ = fetch_price(ticker)
-                if entry_price:
-                    POSITIONS[ticker] = {
-                        'entry_price': entry_price,
-                        'last_price': entry_price,
-                        'trail_active': False,
-                        'peak_price': entry_price,
-                        'cumulative_loss': 0,
-                        'break_even': False
-                    }
-                    print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} pattern")
+        if is_hammer(candles[-1]):
+            pattern = "Hammer"
+        elif is_bullish_engulfing(candles[-2], candles[-1]):
+            pattern = "Bullish Engulfing"
+        else:
+            pattern = None
+
+        if pattern:
+            entry_price, _ = fetch_price(ticker)
+            if entry_price:
+                POSITIONS[ticker] = {
+                    'entry_price': entry_price,
+                    'last_price': entry_price,
+                    'trail_active': False,
+                    'peak_price': entry_price,
+                    'cumulative_loss': 0,
+                    'break_even': False
+                }
+                print(f"{ticker}: BOUGHT at {entry_price:.2f} based on {pattern} pattern")
         time.sleep(DELAY)
 
 if __name__ == "__main__":
