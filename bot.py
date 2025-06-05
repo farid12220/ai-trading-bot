@@ -237,9 +237,7 @@ def simulate_trade():
         elif is_breakout_retest(candles):
             pattern = "Breakout + Retest"
         elif is_doji_near_vwap(candles[-1], vwap):
-        pattern = "Doji near VWAP"
-    elif is_bullish_engulfing(candles[-2], candles[-1]) and abs(candles[-1]['c'] - vwap) / vwap <= VWAP_TOLERANCE:
-        pattern = "Engulfing near VWAP"
+            pattern = "Doji near VWAP"
             pattern = "Doji near VWAP"
 
         if not pattern:
