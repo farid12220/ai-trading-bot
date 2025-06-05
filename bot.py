@@ -82,6 +82,7 @@ def fetch_recent_candles(symbol, limit=6):
     else:
         return None
 
+# === PATTERNS ===
 def is_hammer(candle):
     body = abs(candle['c'] - candle['o'])
     lower_wick = candle['o'] - candle['l'] if candle['o'] > candle['c'] else candle['c'] - candle['l']
@@ -140,6 +141,16 @@ def is_breakout_retest(candles):
         return False
     return current['c'] > breakout['h']
 
+def is_doji_near_vwap(candle, vwap):
+    body = abs(candle['c'] - candle['o'])
+    range_ = candle['h'] - candle['l']
+    if range_ == 0:
+        return False
+    if body / range_ > 0.15:
+        return False
+    return abs(candle['c'] - vwap) / vwap <= VWAP_TOLERANCE
+
+# === LOGGING ===
 def insert_trade(ticker, entry, exit, profit):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
@@ -160,6 +171,7 @@ def insert_trade(ticker, entry, exit, profit):
     url = f"{SUPABASE_URL}/rest/v1/trades"
     requests.post(url, json=payload, headers=headers)
 
+# === SCHEDULE ===
 def market_is_open():
     eastern = pytz.timezone("US/Eastern")
     now_et = datetime.datetime.now(eastern)
@@ -167,6 +179,7 @@ def market_is_open():
     market_close = now_et.replace(hour=16, minute=0, microsecond=0)
     return market_open <= now_et <= market_close
 
+# === MAIN ===
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
@@ -205,6 +218,11 @@ def simulate_trade():
         candles = fetch_recent_candles(ticker, limit=6)
         if not candles or len(candles) < 3:
             continue
+        entry_price, _ = fetch_price(ticker)
+        vwap = fetch_vwap(ticker)
+        if not entry_price or not vwap:
+            continue
+
         pattern = None
         if is_hammer(candles[-1]):
             pattern = "Hammer"
@@ -218,14 +236,12 @@ def simulate_trade():
             pattern = "Inside Bar"
         elif is_breakout_retest(candles):
             pattern = "Breakout + Retest"
+        elif is_doji_near_vwap(candles[-1], vwap):
+            pattern = "Doji near VWAP"
 
         if not pattern:
             continue
 
-        entry_price, _ = fetch_price(ticker)
-        vwap = fetch_vwap(ticker)
-        if not entry_price or not vwap:
-            continue
         if abs(entry_price - vwap) / vwap > VWAP_TOLERANCE:
             continue
         avg_volume = sum(c['v'] for c in candles[:-1]) / (len(candles) - 1)
