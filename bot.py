@@ -22,6 +22,7 @@ VWAP_TOLERANCE = 0.005
 ALL_TICKERS = []
 POSITIONS = {}
 DAILY_PROFIT = 0
+PERFORMANCE = {}  # Track results by pattern
 
 def load_all_tickers():
     global ALL_TICKERS
@@ -151,7 +152,7 @@ def is_doji_near_vwap(candle, vwap):
     return abs(candle['c'] - vwap) / vwap <= VWAP_TOLERANCE
 
 # === LOGGING ===
-def insert_trade(ticker, entry, exit, profit):
+def insert_trade(ticker, entry, exit, profit, pattern):
     global DAILY_PROFIT
     DAILY_PROFIT += profit
     payload = {
@@ -171,6 +172,16 @@ def insert_trade(ticker, entry, exit, profit):
     url = f"{SUPABASE_URL}/rest/v1/trades"
     requests.post(url, json=payload, headers=headers)
 
+    if pattern not in PERFORMANCE:
+        PERFORMANCE[pattern] = {'count': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0}
+    PERFORMANCE[pattern]['count'] += 1
+    if profit >= 0:
+        PERFORMANCE[pattern]['wins'] += 1
+    else:
+        PERFORMANCE[pattern]['losses'] += 1
+    PERFORMANCE[pattern]['pnl'] += profit
+    print_performance()
+
 # === SCHEDULE ===
 def market_is_open():
     eastern = pytz.timezone("US/Eastern")
@@ -180,6 +191,11 @@ def market_is_open():
     return market_open <= now_et <= market_close
 
 # === MAIN ===
+def print_performance():
+    print("[PERFORMANCE]")
+    for pat, data in PERFORMANCE.items():
+        print(f"{pat} — {data['count']} trades, {data['wins']} wins, {data['losses']} losses, ${data['pnl']:.2f}")
+
 def simulate_trade():
     global POSITIONS
     for ticker in list(POSITIONS):
@@ -204,7 +220,7 @@ def simulate_trade():
         break_even = position['break_even'] and current_price < entry_price
         if stop or trail or break_even:
             profit = current_price - entry_price
-            insert_trade(ticker, entry_price, current_price, profit)
+            insert_trade(ticker, entry_price, current_price, profit, position['pattern'])
             del POSITIONS[ticker]
         time.sleep(DELAY)
 
@@ -255,7 +271,8 @@ def simulate_trade():
             'trail_active': False,
             'peak_price': entry_price,
             'cumulative_loss': 0,
-            'break_even': False
+            'break_even': False,
+            'pattern': pattern
         }
         print(f"{ticker}: BOUGHT at {entry_price:.2f} on {pattern}")
         time.sleep(DELAY)
